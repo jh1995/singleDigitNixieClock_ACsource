@@ -3,12 +3,12 @@
 
 
 #define ANODEPIN 5
-#define BCD1PIN 6
-#define BCD2PIN 7
-#define BCD3PIN 8
-#define BCD4PIN 9
-#define LPPIN 10
-#define RPPIN 11
+#define BCD1PIN 13
+#define BCD2PIN 14
+#define BCD3PIN 15
+#define BCD4PIN 15
+#define LPPIN 18
+#define RPPIN 19
 
 #define PWMOFF 0
 #define PWMON 255
@@ -247,7 +247,7 @@ void loop() {
   if (secondsElapsed > 59) {
     increaseMinutes();
     secondsElapsed = 0;
-    fadeSpeed = random(10, 100); // randomize new fading timing
+    fadeSpeed = random(1, 11) * 10; // randomize new fading timing
   }
 
 
