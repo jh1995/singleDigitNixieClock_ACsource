@@ -1,14 +1,15 @@
 #include <Entropy.h>
 #include <digitalWriteFast.h>
 
-
 #define ANODEPIN 5
-#define BCD1PIN 13
-#define BCD2PIN 14
-#define BCD3PIN 15
+#define BCD1PIN 16
+#define BCD2PIN 13
+#define BCD3PIN 14
 #define BCD4PIN 15
-#define LPPIN 18
-#define RPPIN 19
+#define LPPIN 19
+#define RPPIN 18
+#define BUTTONPIN 7
+
 
 #define PWMOFF 0
 #define PWMON 255
@@ -23,6 +24,7 @@
 int tickElapsed = 0;
 //int oldTickElapsed = 0;
 int secondsElapsed = 0;
+int oldSecondsElapsed = 0;
 int blinkState;
 unsigned int pwmLevel = 0;
 unsigned int fadeSpeed = 30;
@@ -30,15 +32,30 @@ unsigned long millisOld = 0;
 const long millisDiff = 19;
 
 // start time, until we implement a contactless way to set the time 
-int hours = 10;
-int minutes = 48;
+int hours = 20;
+int minutes = 00;
 
 int decoderPins[6] = { BCD1PIN, BCD2PIN, BCD3PIN, BCD4PIN, LPPIN, RPPIN}; //LSB first
 
+// remapping 74141/K155 output
+// 0354986721 <- shown in the tube
+// 0123456789 <- decoded by the IC
+int symbolMap[10] = {0,9,8,1,3,2,6,7,5,4};
+
+// variables needed for debouncing the button
+int lastButtonState = HIGH; // 1 = not pressed
+int buttonState;
+unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
+unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
+
+int setupMode = 0;
 
 void setup() {
 
-  pinMode( ANODEPIN, OUTPUT);
+  Serial.begin(9600);
+
+  pinMode(BUTTONPIN, INPUT_PULLUP); // the button closes to ground, so we offer some V support :)
+  pinMode(ANODEPIN, OUTPUT);
   pwmLevel = PWMOFF;
   analogWrite (ANODEPIN, pwmLevel); // switch off
 
@@ -57,11 +74,51 @@ void setup() {
   seed_value = Entropy.random();
   randomSeed(seed_value);  
 
+  if (digitalRead(BUTTONPIN) == LOW) { // fine, skipping debouncing
+    setupMode = 1;
+    analogWrite (ANODEPIN, PWMON);
+    Serial.println("Entering setup mode ...");
+  }
+
   // the external timebase
   pinMode( fiftyHzInterruptPin, INPUT);
   attachInterrupt(digitalPinToInterrupt(fiftyHzInterruptPin), fiftyHzISR, FALLING); 
 
 }
+
+
+int readButton() {
+   
+  // read the state of the switch into a local variable:
+  int reading = digitalRead(BUTTONPIN);
+
+  // check to see if you just pressed the button
+  // (i.e. the input went from HIGH to LOW), and you've waited long enough
+  // since the last press to ignore any noise:
+
+  // If the switch changed, due to noise or pressing:
+  if (reading != lastButtonState) {
+    // reset the debouncing timer
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    // whatever the reading is at, it's been there for longer than the debounce
+    // delay, so take it as the actual current state:
+
+    // if the button state has changed:
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      // only toggle the LED if the new button state is HIGH
+      if (buttonState == LOW) {
+        return 1; // return putton pressed
+      } else {
+        return 0; // return button depressed
+      }
+    }
+  }
+} // end sub
 
 // ISR triggered every 20 milliseconds or so. It checks that at least 19 ms
 // have passed. Not sure what happens when millis overflow and return to zero.
@@ -93,7 +150,7 @@ void outputToNixie( int digitOut, int lpOut, int rpOut, int dontBlink) {
     digitalWriteFast(BCD3PIN, 1);
   } else {
 
-    int digitOutBCD = decToBcd(digitOut); 
+    int digitOutBCD = decToBcd(symbolMap[digitOut]); 
   
     unsigned int pos = 1;
   
@@ -104,9 +161,7 @@ void outputToNixie( int digitOut, int lpOut, int rpOut, int dontBlink) {
     }
   }
 
-  fadeIn();
-
-  // *** TODO Can be improved
+    // *** TODO Can be improved
   if (dontBlink != 1) {
     if (blinkState > 0) {
       digitalWrite(decoderPins[4], lpOut);
@@ -120,17 +175,20 @@ void outputToNixie( int digitOut, int lpOut, int rpOut, int dontBlink) {
     digitalWrite(decoderPins[5], rpOut);
   }
 
+  fadeIn();
+
 }
 
 
 void outputToNixieNoFade( int digitOut, int lpOut, int rpOut, int dontBlink) {
+
 
   if ( digitOut == 16) {
     digitalWriteFast(BCD4PIN, 1);
     digitalWriteFast(BCD3PIN, 1);
   } else {
 
-    int digitOutBCD = decToBcd(digitOut); 
+    int digitOutBCD = decToBcd(symbolMap[digitOut]); 
   
     unsigned int pos = 1;
   
@@ -224,101 +282,178 @@ void fadeIn() {
 
 }
 
+void fastShow(int digitOut, int lpOut, int rpOut, int dontBlink) {
 
+  int maxLoop = digitOut+10;
+  int toShow_local;
+  
+  if (oldSecondsElapsed != secondsElapsed) {
+    for (int fsi=0; fsi<maxLoop; fsi++) {
+      toShow_local = fsi % 10;
+      outputToNixieNoFade(toShow_local,0,0,dontBlink);
+      delay(15);
+    }
+  }
+  oldSecondsElapsed = secondsElapsed;
+
+  outputToNixieNoFade(digitOut, lpOut, rpOut, dontBlink);
+  
+}
+
+int increaseAndShow(int newValueL, int maxValue) {
+
+  int tens=0;
+  int twenties=0;
+  int toShow;
+
+  Serial.print("increaseAndShow: ");
+  
+  newValueL++;
+  newValueL = newValueL % maxValue;
+  toShow = newValueL % 10;
+
+  if (newValueL > 9) {
+    tens = 1;
+  }
+
+  if (newValueL > 19) {
+    twenties = 1;
+  }
+
+  Serial.println(toShow);
+  
+  outputToNixieNoFade(toShow,tens,twenties,1);
+
+  delay(1000);
+
+  return newValueL;
+}
+
+
+// *****************************************************
+// **  MAIN   MAIN    MAIN  ****************************
+// *****************************************************
 
 void loop() {
 
   int toShow;
+  static int newValue;
+
   
-  // handle blinking
-  if (tickElapsed < 25) {
-    blinkState = 1;
-  } else {
-    blinkState = 0;
-  }
-
-  // handle loop of 1/50s ticks and counts seconds
-  if (tickElapsed > 49) {
-    secondsElapsed++;
-    tickElapsed = 0;
-  }
-
-  // handle loop of 60 seconds (0..59)
-  if (secondsElapsed > 59) {
-    increaseMinutes();
-    secondsElapsed = 0;
-    fadeSpeed = random(1, 11) * 10; // randomize new fading timing
-  }
-
-
-  // do the display business
-  switch (secondsElapsed) {
-    case 0:
-    case 20:
-    case 40:
-      toShow = hours / 10;
-      outputToNixie(toShow,1,0,DONTBLINK);
-      break;
-    case 1:
-    case 21:
-    case 41:
-      fadeOut();
-      allOff();
-      break;
-    case 2:
-    case 22:
-    case 42:
-      toShow = hours % 10;
-      outputToNixie(toShow,1,0, DONTBLINK);   
-      break;
-    case 3:
-    case 23:
-    case 43:
-      fadeOut();
-      allOff();
-      break;
-    case 4:
-    case 24:
-    case 44:
-      // allOff(); not needed because the 16 takes care of it:
-      outputToNixie(16,1,1,DONTBLINK); // just the two dots
-      break;
-    case 5:
-    case 25:
-    case 45:
-      fadeOut();
-      allOff();
-      break;
-    case 6:
-    case 26:
-    case 46:
-      toShow = minutes / 10;
-      outputToNixie(toShow,0,1,DONTBLINK);    
-      break;
-    case 7:
-    case 27:
-    case 47:
-      fadeOut();
-      allOff();
-      break;
-    case 8:
-    case 28:
-    case 48:
-      toShow = minutes % 10;
-      outputToNixie(toShow,0,1,DONTBLINK);
-      break;
-    case 9:
-    case 29:
-    case 49:
-      fadeOut();
-      allOff();
-      break;      
-    default:
-      outputToNixie(16,1,1,DOBLINK); // show only dots
-      break;
-    
-  }
-
+    // handle blinking
+    if (tickElapsed < 25) {
+      blinkState = 1;
+    } else {
+      blinkState = 0;
+    }
+  
+    // handle loop of 1/50s ticks and counts seconds
+    if (tickElapsed > 49) {
+      oldSecondsElapsed = secondsElapsed;
+      secondsElapsed++;
+      tickElapsed = 0;
+    }
+  
+    // handle loop of 60 seconds (0..59)
+    if (secondsElapsed > 59) {
+      increaseMinutes();
+      secondsElapsed = 0;
+      fadeSpeed = random(1, 11) * 10; // randomize new fading timing
+    }
+  
+  
+    // do the display business
+    switch (secondsElapsed) {
+      case 0:
+      case 20:
+      case 40:
+        toShow = hours / 10;
+        outputToNixie(toShow,1,0,DONTBLINK);
+        break;
+      case 13:
+      case 33:
+      case 53:
+        toShow = hours / 10;
+        fastShow(toShow,1,1,DONTBLINK);
+        break;
+      case 14:
+      case 34:
+      case 54:
+        toShow = hours % 10;
+        fastShow(toShow,1,0,DONTBLINK);
+        break;
+      case 15:
+      case 35:
+      case 55:
+        toShow = minutes / 10;
+        fastShow(toShow,0,1,DONTBLINK);
+        break;
+      case 16:
+      case 36:
+      case 56:
+        toShow = minutes % 10;
+        fastShow(toShow,0,0,DONTBLINK);
+        break;            
+      case 1:
+      case 21:
+      case 41:
+        fadeOut();
+        allOff();
+        break;
+      case 2:
+      case 22:
+      case 42:
+        toShow = hours % 10;
+        outputToNixie(toShow,1,0, DONTBLINK);   
+        break;
+      case 3:
+      case 23:
+      case 43:
+        fadeOut();
+        allOff();
+        break;
+      case 4:
+      case 24:
+      case 44:
+        // allOff(); not needed because the 16 takes care of it:
+        outputToNixie(16,1,1,DONTBLINK); // just the two dots
+        break;
+      case 5:
+      case 25:
+      case 45:
+        fadeOut();
+        allOff();
+        break;
+      case 6:
+      case 26:
+      case 46:
+        toShow = minutes / 10;
+        outputToNixie(toShow,0,1,DONTBLINK);    
+        break;
+      case 7:
+      case 27:
+      case 47:
+        fadeOut();
+        allOff();
+        break;
+      case 8:
+      case 28:
+      case 48:
+        toShow = minutes % 10;
+        outputToNixie(toShow,0,1,DONTBLINK);
+        break;
+      case 9:
+      case 29:
+      case 49:
+        fadeOut();
+        allOff();
+        break;      
+      default:
+        outputToNixie(16,1,1,DOBLINK); // show only dots
+        break;
+      
+    }
 
 }
+
 
