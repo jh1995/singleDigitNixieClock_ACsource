@@ -1,3 +1,4 @@
+#include <EEPROM.h>
 #include <Entropy.h>
 #include <digitalWriteFast.h>
 
@@ -32,8 +33,12 @@ unsigned long millisOld = 0;
 const long millisDiff = 19;
 
 // start time, until we implement a contactless way to set the time 
-int hours = 20;
-int minutes = 00;
+#define ADDRESS_START_HOURS 0  // EEPROM address to store start hours
+#define DEFAULT_START_HOURS 9
+#define DEFAULT_START_MINUTES 00
+int hours;    // a default
+int minutes;  // a default
+
 
 int decoderPins[6] = { BCD1PIN, BCD2PIN, BCD3PIN, BCD4PIN, LPPIN, RPPIN}; //LSB first
 
@@ -79,6 +84,15 @@ void setup() {
     analogWrite (ANODEPIN, PWMON);
     Serial.println("Entering setup mode ...");
   }
+  hours = EEPROM.read(ADDRESS_START_HOURS);
+  Serial.print("Current hours: ");
+  Serial.println(hours);
+  if ((hours>23)||(hours<0)) {  // do a sanity check and reset to the default in case of EEPROM error
+    EEPROM.write(ADDRESS_START_HOURS, DEFAULT_START_HOURS);
+    hours = DEFAULT_START_HOURS;
+    Serial.println("Resetting invalid hours in EEPROM.");
+  }
+  minutes = DEFAULT_START_MINUTES;
 
   // the external timebase
   pinMode( fiftyHzInterruptPin, INPUT);
@@ -339,6 +353,31 @@ void loop() {
   int toShow;
   static int newValue;
 
+    // the "button" has been presset before/during the power-on or setup()
+    if (setupMode == 1) {
+      analogWrite (ANODEPIN, PWMON);
+
+      while (digitalRead(BUTTONPIN) == LOW) { // no need to debounce, the button is pressed before powerup
+      //while (readButton() == 1) {
+
+        Serial.println(hours);
+        fastShow((hours%10),0,0,DONTBLINK);  // digit and no dots
+        if (hours > 9) {
+          fastShow((hours%10),1,0,DONTBLINK);  // digit and one dot
+        }
+        if (hours > 19) {
+          fastShow((hours%10),1,1,DONTBLINK);  // digit and two dots
+        }
+        
+        delay(1500);
+        increaseHours();
+        
+      } // end while readButton
+
+      EEPROM.write(ADDRESS_START_HOURS, hours-1); // -1 is necessary because hours was increased before leaving the loop
+      setupMode = 0;
+      Serial.println("Leaving setup mode.");
+    } // end if setupmode
   
     // handle blinking
     if (tickElapsed < 25) {
@@ -455,5 +494,3 @@ void loop() {
     }
 
 }
-
-
